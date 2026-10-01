@@ -89,11 +89,13 @@ climate:
     plevels: [ 700,750,775,800,825,850,875,900,925,950,975,1000 ]
     download_threads: 1               # Number of threads to request downloads with cdsapi
     realtime: False                   # (Optional) Forces redownload of latest month of ERA5 data upon each run of code (allows daily updates for realtime applications)
-    data_repository: cds              # repository from where to download data: cds (copernicus official ERA5), google_cloud_storage (Google archive of ERA5)
+    data_repository: cds              # repository from where to download data: cds (Copernicus official ERA5) or edh (Earth Data Hub Zarr mirror, see below)
     cds_output_format: netcdf         # netcdt or grib. Grib is not supported by topoclass
     cds_download_format: unarchived   # unarchived or zip
     rm_daily: False                   # remove 
-    zarr_store: ERA5.zarr             # name of the zarr store containing the ERA5 data (local store. currently not yet compatible with remote store)
+    zarr_store: ERA5.zarr             # name of the local zarr store containing the ERA5 data. When set, downscale_climate() uses topo_scale_zarr
+    edh_output_format: zarr           # (edh only) zarr (default), netcdf (yearly SURF/PLEV files) or both
+    edh_max_concurrency: 8            # (edh only) number of remote chunks downloaded at the same time
 
 #.....................................................................................................
 dem:
@@ -143,7 +145,7 @@ outputs:
     da_horizon: da_horizon.nc           # (netcdf)  horizon angles
     landform: landform.tif              # (geotiff) rasters of of cluster labels, [TopoSub]
     downscaled_pt: down_pt_*.nc         # (netcdf)  filename of the downscaled timeseries
-    zarr_store: down.zarr               # (zarr)    name of the zarr store for the downscaled timeseries (optional, only working with Dask)
+    zarr_store: down.zarr               # (zarr)    downscaled timeseries in one Zarr store (point_ind, time) when the ERA5 input is Zarr. Leave empty to get one netcdf per point (downscaled_pt)
 
 clean_up:
   rm_tmp_dirs: True                   # (optional: bool) remove the created tmp directories after downscaling?
@@ -285,4 +287,31 @@ Settings for parallelization should be adapted and considered according to your 
 
 ## Zarr
 
-As of now, we are starting using the file format Zarr to improve IO methods. Zarr is a recent archival format for multidimensional datasets. It behaves like a database, from whic only the data of interest are being loaded into memory. There exist a number of Zarr repository of the ERA5 dataset (Google, AWS, etc.) for which we do not have yet well establisehed  method to pull data from. However, when downloading data from CDS, it is now possible to download these data as `netcdf` as before, but then convert them localy into a zarr archive. This improves significantly the downscaling speed (x1.4). Example code will soon be available to demonstrate using these newly added options.
+TopoPyScale can read ERA5 from one local Zarr store and downscale from it with `topo_scale_zarr`
+(activated by `climate.era5.zarr_store`). There are two ways to get that store:
+
+1. **Earth Data Hub** (`data_repository: edh`): ERA5 is read directly from the DestinE Earth Data
+   Hub Zarr mirror and written as `climate.path/ERA5.zarr`. Much faster than CDS (a full year for a
+   ~100 km domain takes minutes, and there's no queue). See [Datasets](04_datasetSources.md#from-earth-data-hub-destine)
+   and the [EDH + Zarr pipeline guide](09_edh_zarr_pipeline.md).
+2. **CDS NetCDF → Zarr**: download from CDS as before, then convert the yearly files with
+   `FetchERA5.to_zarr()` / `fetch_era5.convert_netcdf_stack_to_zarr()`.
+
+Minimal EDH configuration:
+
+```yaml
+climate:
+  era5:
+    path: /home/me/era5_myregion       # Linux filesystem (not /mnt/c on WSL: Zarr = many small files)
+    timestep: 1h
+    plevels: [600, 700, 850, 925, 1000]
+    data_repository: edh
+    edh_output_format: zarr            # or both, to also get yearly SURF/PLEV netcdf files
+    zarr_store: ERA5.zarr
+outputs:
+  file:
+    zarr_store: down.zarr              # downscaled output as one Zarr store
+```
+
+The Zarr downscaler is resumable: finished points are recorded in
+`outputs/downscaled/down.zarr.progress/`, and a rerun only computes the missing ones.

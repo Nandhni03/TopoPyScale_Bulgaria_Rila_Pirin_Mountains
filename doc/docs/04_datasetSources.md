@@ -15,6 +15,34 @@ ERA5 comes in two parts:
 
 Copernicus whom generate the ERA5 data is also a portal to download the data. TopoPyScale has a routine to download the data given identification to the cds system has been done.
 
+#### From Earth Data Hub (DestinE)
+
+The [Earth Data Hub](https://earthdatahub.destine.eu/collections/era5) of the Destination Earth
+platform mirrors ERA5 hourly single levels and pressure levels (1940–present, updated monthly) as
+analysis-ready Zarr v3 stores. TopoPyScale reads them with `data_repository: edh`
+(module `fetch_era5_edh`). Nothing is queued: only the chunks covering your domain and period are
+read, many at a time.
+
+- **Account and key**: a DestinE account with the data-access upgrade, and an Earth Data Hub
+  **classic** API key (platform.destine.eu → *Quota & API Keys*). A *standard* key is refused with
+  HTTP 426. Put the key in `~/.netrc`:
+
+  ```
+  machine data.earthdatahub.destine.eu
+  login edh
+  password <your classic API key>
+  ```
+
+  or in the environment variable `EDH_TOKEN`. Needs `zarr>=3`.
+- **Quota**: 500,000 requests per month. One request = one remote chunk. TopoPyScale reads each
+  chunk once: about 300 requests per year of data for a domain inside one 15°×15° tile with
+  5 pressure levels (logged in `edh_blocks/fetch_report.json`).
+- **Pressure levels available**: 1000, 925, 850, 700, 600, 500, 400, 300, 250, 200, 150, 100, 70,
+  50, 30, 20, 10, 5, 1 hPa. Fewer than on CDS (no 975, 950, 900, 875, 825, 800, 775, 750, 650). The
+  fetcher uses the available levels within your `plevels` range and logs which ones are missing.
+- **Accumulations** (tp, ssrd, strd) follow the CDS convention: the value at time T is the
+  accumulation over the previous hour.
+
 #### From Google Cloud Storage repository
 
 Google Cloud Storage maintains a publicly accessible repository of the ERA5 data. TopoPyScale includes a routine to download data from there given authentification to Google Cloud has been done has explained by Google: https://cloud.google.com/sdk/docs/install

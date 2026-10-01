@@ -152,10 +152,13 @@ class FetchERA5():
 
             # Check data repository is currently supported
             data_repository = self.config.climate[self.config.project.climate].data_repository
-            if data_repository == 'cds':
+            if data_repository == 'edh':
+                self.fetch_from_edh(lonW, lonE, latS, latN)
+                return
+            elif data_repository == 'cds':
                 pass
             else:
-                raise ValueError(f"Data repository {data_repository} not yet supported.")
+                raise ValueError(f"Data repository {data_repository} not yet supported. Use 'cds' or 'edh'.")
 
             if self.get_surf:
                 # retreive ERA5 surface data
@@ -199,6 +202,35 @@ class FetchERA5():
                     verify_flag=self.verify_flag
                 )
 
+
+    def fetch_from_edh(self, lonW, lonE, latS, latN):
+        """
+        Fetch ERA5 from Earth Data Hub (see fetch_era5_edh.py). Config keys under climate.era5:
+            edh_output_format: 'zarr' (default), 'netcdf' or 'both'
+            zarr_store: name of the Zarr store in climate.path (default 'ERA5.zarr' when Zarr is written)
+            edh_max_concurrency: parallel chunk downloads (default 8)
+        When a Zarr store is written, climate.era5.zarr_store is set so downscale_climate() uses
+        topo_scale_zarr. With edh_output_format 'netcdf' the classic path is used.
+        """
+        from TopoPyScale import fetch_era5_edh as fedh
+        era = self.config.climate[self.config.project.climate]
+        fmt = era.edh_output_format or 'zarr'
+        if fmt in ('zarr', 'both') and not era.zarr_store:
+            era.zarr_store = 'ERA5.zarr'
+            print(f"---> climate.era5.zarr_store not set: using '{era.zarr_store}'")
+        if fmt == 'netcdf' and era.zarr_store:
+            print("---> WARNING: edh_output_format is 'netcdf' but zarr_store is set; downscale_climate() "
+                  "will look for the Zarr store. Unset zarr_store to use the yearly NetCDF files.")
+        self.edh_report = fedh.fetch_era5_edh(
+            start=self.config.project.start,
+            end=self.config.project.end,
+            bbox={'latN': latN, 'latS': latS, 'lonW': lonW, 'lonE': lonE},
+            plevels=era.plevels,
+            timestep=era.timestep,
+            output_dir=self.config.climate.path,
+            output_format=fmt,
+            zarr_name=era.zarr_store or 'ERA5.zarr',
+            max_concurrency=era.edh_max_concurrency or 8)
 
     def get_era5_snowmapper(self, surf_plev, lastday):
         """

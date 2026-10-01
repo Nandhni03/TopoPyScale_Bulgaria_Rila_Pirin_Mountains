@@ -29,7 +29,7 @@ def read_downscaled(path='outputs/down_pt*.nc'):
     return down_pts
 
 
-def ds_to_indexed_dataframe(ds):
+def ds_to_indexed_dataframe(ds, dim_order=None):
     """
     Function to convert an Xarray dataset with multi-dimensions to indexed dataframe (and not a multilevel indexed dataframe).
     WARNING: this only works if the variable of the dataset have all the same dimensions!
@@ -42,7 +42,9 @@ def ds_to_indexed_dataframe(ds):
     Returns:
         pandas dataframe:
     """
-    df = ds.to_dataframe()
+    # dim_order (e.g. ['y', 'x']) fixes the row order explicitly; by default it follows ds.dims,
+    # which can differ between datasets on the same grid
+    df = ds.to_dataframe(dim_order=dim_order)
     n_levels = df.index.names.__len__()
     return df.reset_index(level=list(range(0, n_levels)))
 

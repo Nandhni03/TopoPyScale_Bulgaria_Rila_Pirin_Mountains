@@ -95,6 +95,9 @@ class Topoclass(object):
         if os.path.isabs(self.config.climate[self.config.project.climate].path):
             # modify pth handling with Path
             self.config.climate.path = Path(self.config.climate[self.config.project.climate].path)
+            self.config.climate.tmp_path = self.config.climate.path / 'tmp'
+            self.config.climate.path.mkdir(parents=True, exist_ok=True)
+            self.config.climate.tmp_path.mkdir(parents=True, exist_ok=True)
 
         else:
             #self.config.climate.path = self.config.project.directory / 'inputs' / 'climate'
@@ -110,6 +113,7 @@ class Topoclass(object):
 
         if not self.config.dem.path:
                         self.config.dem.path = self.config.project.directory / 'inputs' / 'dem'
+        self.config.dem.path = Path(self.config.dem.path)   # a path given in the YAML is a str
         self.config.dem.path.mkdir(parents=True, exist_ok=True)
 
         self.config.dem.filepath = self.config.dem.path / self.config.dem.file
@@ -309,7 +313,15 @@ class Topoclass(object):
         # ----------proceed----------
 
         # read df param
-        df_param = ts.ds_to_indexed_dataframe(self.toposub.ds_param)
+        # Every raster here is flattened in ONE explicit order (y, x: row by row). Before, the order
+        # followed each Dataset's dims order, which differs between ds_param (y, x) and a mask read
+        # with rasterio (x, y), so the mask was applied to the wrong pixels (combined by position).
+        dim_order = ['y', 'x']
+
+        def flat(da):
+            return da.transpose(*dim_order).values.ravel()
+
+        df_param = tu.ds_to_indexed_dataframe(self.toposub.ds_param, dim_order=dim_order)
 
         # Auto-mask nodata pixels (e.g. from reprojected DEMs with non-rectangular valid regions)
         valid_elev = ~df_param['elevation'].isna()
@@ -342,7 +354,7 @@ class Topoclass(object):
             print(f'---> Only consider grid cells inside mask ({Path(mask_file).name})')
 
             # get mask (combine with nodata auto-mask)
-            mask = (ts.ds_to_indexed_dataframe(ds_mask)['mask'] == 1) & valid_elev
+            mask = pd.Series(flat(ds_mask.mask) == 1, index=df_param.index) & valid_elev
 
         # add cluster groups. Groups can be landcover classes for instance
         if groups_file in [None, {}]:
@@ -366,7 +378,7 @@ class Topoclass(object):
                     'The GeoTIFFS of the DEM and the MASK must have the same bounds/resolution. Please check.')
 
             # add cluster group
-            df_param['cluster_group'] = ts.ds_to_indexed_dataframe(ds_group)['group'].astype(int)
+            df_param['cluster_group'] = pd.Series(flat(ds_group.group), index=df_param.index).astype(int)
 
             # create group dataframe
             gr = df_param[mask].groupby('cluster_group').slope.count()
@@ -455,19 +467,22 @@ class Topoclass(object):
         self.toposub.df_centroids['point_ind'] = self.toposub.df_centroids.cluster_labels.astype(int)
         if df_param.cluster_labels.isnull().values.any():
             df_param['point_name'] = '-9999'
-            df_param['point_name'].loc[~df_param.cluster_labels.isnull()] = df_param.cluster_labels.loc[~df_param.cluster_labels.isnull()].astype(int).astype(str).str.zfill(n_digits)
+            # .loc on the frame (not chained df[col].loc[...]) so the write is not lost under pandas>=3 Copy-on-Write
+            not_null = ~df_param.cluster_labels.isnull()
+            df_param.loc[not_null, 'point_name'] = df_param.loc[not_null, 'cluster_labels'].astype(int).astype(str).str.zfill(n_digits)
             df_param['point_ind'] = df_param.point_name.astype(int)
         else:
             df_param['point_name'] = df_param.cluster_labels.astype(int).astype(str).str.zfill(n_digits)
             df_param['point_ind'] = df_param.cluster_labels.astype(int)
 
-        # Build the final cluster map
-        shape = self.toposub.ds_param.slope.shape
-        self.toposub.ds_param['cluster_labels'] = (["y", "x"], np.reshape(df_param.point_name.to_numpy(), shape,order='F'))
-        self.toposub.ds_param['point_name'] = (["y", "x"], np.reshape(df_param.point_name.to_numpy(), shape,order='F'))
-        self.toposub.ds_param['point_ind'] = (["y", "x"], np.reshape(df_param.point_ind.to_numpy(), shape,order='F'))
+        # Build the final cluster map. df_param rows are in (y, x) order (see dim_order above),
+        # so reshape row by row (order='C') into (ny, nx).
+        shape = self.toposub.ds_param.slope.transpose(*dim_order).shape
+        self.toposub.ds_param['cluster_labels'] = (dim_order, np.reshape(df_param.point_name.to_numpy(), shape, order='C'))
+        self.toposub.ds_param['point_name'] = (dim_order, np.reshape(df_param.point_name.to_numpy(), shape, order='C'))
+        self.toposub.ds_param['point_ind'] = (dim_order, np.reshape(df_param.point_ind.to_numpy(), shape, order='C'))
         if split_clustering:
-            self.toposub.ds_param['cluster_group'] = (["y", "x"], np.reshape(df_param.cluster_group.to_numpy(), shape,order='F'))
+            self.toposub.ds_param['cluster_group'] = (dim_order, np.reshape(df_param.cluster_group.to_numpy(), shape, order='C'))
 
         # update file
         fname = self.config.outputs.path / self.config.outputs.file.ds_param
@@ -698,6 +713,9 @@ class Topoclass(object):
 
 
                 era5_zarr_path = self.config.climate.path / Path(self.config.climate.era5.zarr_store)
+                # Output: one Zarr store if outputs.file.zarr_store is set, else one netcdf per point.
+                # (ClimateDownscaler accepts only one of the two.)
+                out_store = self.config.outputs.file.zarr_store or None
                 cda = tz.ClimateDownscaler(
                             era5_zarr_path=era5_zarr_path,
                             output_path=downscaled_dir,
@@ -712,8 +730,8 @@ class Topoclass(object):
                             interp_method=self.config.toposcale.interpolation_method,
                             lw_terrain_flag=self.config.toposcale.LW_terrain_contribution,
                             precip_lapse_rate_flag=self.config.climate.precip_lapse_rate,
-                            file_pattern=self.config.outputs.file.downscaled_pt,
-                            store_name=self.config.outputs.file.zarr_store                            
+                            file_pattern=None if out_store else f_pattern,
+                            store_name=out_store
                     )
 
                 if self.config.project.parallelization.downscaling_method.lower() == 'multicore':
@@ -726,16 +744,17 @@ class Topoclass(object):
                         'memory_target_fraction': self.config.project.parallelization.setting.dask.memory_target_fraction,
                         'memory_limit': self.config.project.parallelization.setting.dask.memory_limit
                     }
-                    cda.dask_parallel_process_multiple_subsets(dask_worker=self.config.project.dask_worker)
-                
+                    cda.dask_parallel_process_multiple_subsets(dask_worker=dask_worker)
+
                 else:
                     raise ValueError('Parallelization method must be multicore (multiprocessing core library), or Dask')
             else:
                 print('deadend')
-        print("debug 0")
 
-        self.downscaled_pts = tu.read_downscaled(f'{downscaled_dir}/{f_pattern}')
-        print("debug 1")
+        if self.config.climate.era5.zarr_store is not None and self.config.outputs.file.zarr_store:
+            self.downscaled_pts = tz.open_downscaled_store(downscaled_dir / self.config.outputs.file.zarr_store)
+        else:
+            self.downscaled_pts = tu.read_downscaled(f'{downscaled_dir}/{f_pattern}')
         # update plotting class variables
         self.plot.ds_down = self.downscaled_pts
 

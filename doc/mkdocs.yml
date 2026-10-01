@@ -13,6 +13,7 @@ nav:
     - Examples: 06_examples.md
     - Features: 07_features.md
     - Development: 08_development.md
+    - EDH + Zarr pipeline: 09_edh_zarr_pipeline.md
     - FAQ: 20_FAQ.md
     - API:
         - topoclass: TopoPyScale.topoclass.md
