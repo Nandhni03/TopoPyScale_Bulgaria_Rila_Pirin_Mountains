@@ -235,7 +235,7 @@ def downscale_point(row, plev_pt, surf_pt, solar_pt, horizon_values, meta):
     down_pt['SW_direct'][~sunset] = down_pt.SW_direct_tmp[~sunset] * (down_pt.cos_illumination[~sunset] / mu0[~sunset]) * (1 - shade)
     down_pt['SW'] = down_pt.SW_diffuse + down_pt.SW_direct
     down_pt = down_pt.drop_vars(['level', 'SW_direct_tmp'], errors='ignore').round(5)
-    down_pt.attrs['vertical_fallback'] = int(vertical_fallback)   # 1: point below z(lowest level) at some hour
+    down_pt.attrs['vertical_fallback'] = int(vertical_fallback)   # 1: point below z(lowest level) at some hour (fallback at those hours only)
 
     down_pt.t.attrs = {'units': 'K', 'long_name': 'Temperature', 'standard_name': 'air_temperature'}
     down_pt.q.attrs = {'units': 'kg kg**-1', 'long_name': 'Specific humidity', 'standard_name': 'specific_humidity'}
@@ -502,8 +502,8 @@ class ClimateDownscaler:
         print(f'---> Downscaling: {len(secs)} points done this run ({n_done_before} earlier), {len(failed)} failed, '
               f'{el:.0f}s wall, {np.mean(secs) if secs else float("nan"):.1f}s per point per worker')
         if fallback:
-            print(f'---> {len(fallback)} point(s) lie below the lowest pressure level at some hour and use the '
-                  f'no-vertical-interpolation fallback: {fallback}')
+            print(f'---> {len(fallback)} point(s) lie below the lowest pressure level at some hours and use the '
+                  f'lowest level\'s values (no vertical interpolation) at those hours only: {fallback}')
         self.vertical_fallback_points = fallback
         if failed:
             i, err = failed[0]
