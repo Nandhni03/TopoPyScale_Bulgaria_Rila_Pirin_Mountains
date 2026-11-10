@@ -106,3 +106,14 @@ def test_circular_mean_aspect_wraps_at_south():
     assert np.degrees(c.aspect[0]) % 360 == pytest.approx(0, abs=1e-6) or np.degrees(c.aspect[0]) == pytest.approx(360)
     assert np.degrees(c.aspect[1]) == pytest.approx(180)
     assert c.aspect_R.values == pytest.approx(np.cos(np.radians(10)))
+
+
+def test_solar_geometry_at_mid_interval(solar):
+    # value labelled 11:00 must be the sun at 10:30 (ERA5 SW at 11:00 = mean over 10:00-11:00)
+    import pvlib
+    t = pd.DatetimeIndex(solar.time.values)
+    i = int(np.flatnonzero(t == pd.Timestamp('2024-12-21 11:00'))[0])
+    sp = pvlib.solarposition.get_solarposition(pd.DatetimeIndex(['2024-12-21 10:30'], tz='UTC'), LAT, LON, 1500.0,
+                                               method='nrel_numpy')
+    assert np.degrees(solar.zenith.values[i]) == pytest.approx(sp.zenith.iloc[0], abs=1e-6)
+    assert np.degrees(solar.azimuth.values[i]) == pytest.approx(180 - sp.azimuth.iloc[0], abs=1e-6)

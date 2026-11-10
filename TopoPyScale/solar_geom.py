@@ -51,10 +51,16 @@ def get_solar_geom(df_position,
                    num_threads=None,
                    fname='ds_solar.nc',
                    project_ouput=Path('./'),
-                   method_solar='nrel_numpy'):
+                   method_solar='nrel_numpy',
+                   mid_interval=True):
     """
     Function to compute solar position for each location given in the dataframe
     azimuth is define with 0 towards South, negative in W-dir, and posiive towards E-dir
+
+    ERA5 radiation at time stamp t is the mean over the interval (t - tstep, t]. With mid_interval=True (default)
+    the sun position is evaluated at the middle of that interval (t - tstep/2) and stored under the label t, so
+    illumination, shading, mu0 and SWtoa refer to the same period as the radiation they scale. With False, the
+    sun is taken at t itself (earlier behaviour: 30 min late for hourly data, i.e. ~7.5 deg towards the west).
 
     Args:
         df_position (dataframe): point_name as index, latitude, longitude
@@ -64,6 +70,7 @@ def get_solar_geom(df_position,
         sr_epsg (str): source EPSG code for the input coordinate
         num_threads (int): number of threads to parallelize computation on. default is number of core -2
         fname (str): name of netcdf file to store solar geometry
+        mid_interval (bool): evaluate the sun at t - tstep/2 (see above)
         project_ouput (str): path to project root directory
 
     Returns: 
@@ -81,7 +88,8 @@ def get_solar_geom(df_position,
 
     df_pool = pd.DataFrame()
     df_pool[['latitude', 'longitude', 'elevation']] = df_position[['latitude', 'longitude', 'elevation']]
-    df_pool['times'] = df_pool.latitude.apply(lambda x: times)
+    times_sun = times - pd.to_timedelta(tstep) / 2 if mid_interval else times
+    df_pool['times'] = df_pool.latitude.apply(lambda x: times_sun)
 
     def compute_solar_geom(time_step, latitude, longitude, elevation):
         arr = pvlib.solarposition.get_solarposition(time_step, latitude, longitude, elevation, method=method_solar)[['zenith', 'azimuth', 'elevation']].values.T
@@ -120,6 +128,8 @@ def get_solar_geom(df_position,
     S0 = 1370 # Solar constat (total TOA solar irradiance) [Wm^-2] used in ECMWF's IFS
     ds['SWtoa'] = S0 * ds.mu0
     ds['sunset'] = ds.mu0 < np.cos(89 * np.pi/180)
+    ds.attrs['solar_position_time'] = ('middle of the interval ending at the time stamp (t - tstep/2)'
+                                       if mid_interval else 'time stamp')
     ds.SWtoa.attrs = {'units': 'W/m**2', 'standard_name': 'Shortwave radiations downward top of the atmosphere'}
     ds.sunset.attrs = {'units': 'bool', 'standard_name': 'Sunset'}
 
