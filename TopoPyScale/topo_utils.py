@@ -14,6 +14,54 @@ import warnings
 import xarray as xr
 
 
+def vertical_interp_plev(plev_interp, elevation, variables=('t', 'u', 'v', 'q')):
+    """
+    Vertical interpolation of pressure-level fields to a point elevation, decided PER TIME STEP.
+
+    At each time step: linear interpolation (in height) between the nearest level below and the nearest level above
+    the point. At time steps when the point lies below every level (below the lowest pressure level's geopotential
+    height), the values of the nearest level above are used (no vertical interpolation, no extrapolation).
+
+    Before 10 Nov 2026 this choice was made once for the whole series: a single time step below the lowest level sent
+    every time step to the no-interpolation branch, so results depended on the length of the period downscaled.
+    The interpolated time steps are computed with exactly the same arithmetic as before (bit-identical).
+
+    Args:
+        plev_interp (dataset): pressure-level fields horizontally interpolated to the point, dims (time, level),
+            geopotential height z in m
+        elevation (float): point elevation [m]
+        variables (tuple): variables to interpolate
+    Returns:
+        dataset (time): the interpolated variables, top_level [hPa], top_z [m], top_t [K] of the nearest level above
+        (used for the pressure), and fallback (bool: point below all levels at that time step)
+    """
+    z = plev_interp.z.transpose('time', 'level').values
+    e = float(elevation)
+    above, below = z > e, z < e
+    if not above.any(axis=1).all():
+        raise ValueError(f'ERROR: Upper pressure level {plev_interp.level.min().values} hPa geopotential is lower than '
+                         f'cluster mean elevation {elevation} at some time step')
+    it = np.arange(z.shape[0])
+    i_top = np.where(above, z - e, np.inf).argmin(axis=1)
+    i_bot = np.where(below, z - e, -np.inf).argmax(axis=1)
+    fallback = ~below.any(axis=1)
+    d_bot = np.abs(z[it, i_bot] - e)
+    d_top = np.abs(z[it, i_top] - e)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        dist = np.array([d_bot, d_top])
+        w = dist / np.sum(dist, axis=0)            # same weights as the former code: bot * w[1] + top * w[0]
+    out = xr.Dataset(coords={'time': plev_interp.time})
+    for v in variables:
+        a = plev_interp[v].transpose('time', 'level').values
+        top, bot = a[it, i_top], a[it, i_bot]
+        out[v] = ('time', np.where(fallback, top, bot * w[1] + top * w[0]))
+    out['top_level'] = ('time', plev_interp.level.values[i_top])
+    out['top_z'] = ('time', z[it, i_top])
+    out['top_t'] = ('time', plev_interp.t.transpose('time', 'level').values[it, i_top])
+    out['fallback'] = ('time', fallback)
+    return out
+
+
 def read_downscaled(path='outputs/down_pt*.nc'):
     """
     Function to read downscaled points saved into netcdf files into one single dataset using Dask

@@ -128,48 +128,17 @@ def pt_downscale_interp(row, ds_plev_pt, ds_surf_pt, meta):
             'point_name': pt_id
     })
 
-    if (row.elevation < plev_interp.z.isel(level=-1)).sum():
-        pt_elev_diff = np.round(np.min(row.elevation - plev_interp.z.isel(level=-1).values), 0)
-        print(f"---> WARNING: Point {pt_id} is {pt_elev_diff} m lower than the {plev_interp.isel(level=-1).level.data} hPa geopotential\n=> "
-                  "Values sampled from Psurf and lowest Plevel. No vertical interpolation")
-        
-        ind_z_top = (plev_interp.where(plev_interp.z > row.elevation).z - row.elevation).argmin('level')
-        top = plev_interp.isel(level=ind_z_top)
-
-        down_pt['t'] = top['t']
-        down_pt['u'] = top.u
-        down_pt['v'] = top.v
-        down_pt['q'] = top.q
-        down_pt['p'] = top.level * (10 ** 2) * np.exp(
-                -(row.elevation - top.z) / (0.5 * (top.t + down_pt.t) * R / g))  # Pressure in bar
-
-    else:
-        # ========== Vertical interpolation at the DEM surface z  ===============
-        ind_z_bot = (plev_interp.where(plev_interp.z < row.elevation).z - row.elevation).argmax('level')
-
-        # In case upper pressure level elevation is not high enough, stop process and print error
-        try:
-            ind_z_top = (plev_interp.where(plev_interp.z > row.elevation).z - row.elevation).argmin('level')
-        except:
-            raise ValueError(
-                f'ERROR: Upper pressure level {plev_interp.level.min().values} hPa geopotential is lower than cluster mean elevation {row.elevation} {plev_interp.z}')
-
-        top = plev_interp.isel(level=ind_z_top)
-        bot = plev_interp.isel(level=ind_z_bot)
-
-        # Preparing interpolation weights for linear interpolation =======================
-        dist = np.array([np.abs(bot.z - row.elevation).values, np.abs(top.z - row.elevation).values])
-        # idw = 1/dist**2
-        # weights = idw / np.sum(idw, axis=0)
-        weights = dist / np.sum(dist, axis=0)
-
-        # ============ Creating a dataset containing the downscaled timeseries ========================
-        down_pt['t'] = bot.t * weights[1] + top.t * weights[0]
-        down_pt['u'] = bot.u * weights[1] + top.u * weights[0]
-        down_pt['v'] = bot.v * weights[1] + top.v * weights[0]
-        down_pt['q'] = bot.q * weights[1] + top.q * weights[0]
-        down_pt['p'] = top.level * (10 ** 2) * np.exp(
-                -(row.elevation - top.z) / (0.5 * (top.t + down_pt.t) * R / g))  # Pressure in bar
+    # ========== Vertical interpolation at the DEM surface z, decided per time step (topo_utils) ===============
+    vi = tu.vertical_interp_plev(plev_interp, row.elevation)
+    n_fb = int(vi.fallback.sum())
+    if n_fb:
+        print(f"---> WARNING: Point {pt_id} is below the {plev_interp.isel(level=-1).level.data} hPa geopotential at "
+              f"{n_fb} of {vi.sizes['time']} time steps => values of the lowest level at those time steps "
+              "(no vertical interpolation)")
+    for v in ('t', 'u', 'v', 'q'):
+        down_pt[v] = vi[v]
+    down_pt['p'] = vi.top_level * (10 ** 2) * np.exp(
+            -(row.elevation - vi.top_z) / (0.5 * (vi.top_t + down_pt.t) * R / g))  # Pressure in Pa
 
         # ======= logic  to compute ws, wd without loading data in memory, and maintaining the power of dask
     down_pt['month'] = ('time', down_pt.time.dt.month.data)
@@ -314,7 +283,7 @@ def pt_downscale_radiations(row, ds_solar, horizon_da, meta, output_dir):
 
     # currently drop azimuth and level as they are coords. Could be passed to variables instead.
     # round(5) required to sufficiently represent specific humidty, q (eg typical value 0.00078)
-    down_pt = down_pt.drop(['level']).round(5)
+    down_pt = down_pt.drop_vars(['level'], errors='ignore').round(5)
 
     # adding metadata
     down_pt.LW.attrs = {'units': 'W m**-2', 'long_name': 'Surface longwave radiation downwards',
