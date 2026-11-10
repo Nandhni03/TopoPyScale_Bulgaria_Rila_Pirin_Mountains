@@ -237,6 +237,11 @@ def downscale_point(row, plev_pt, surf_pt, solar_pt, horizon_values, meta):
     surf_interp['SW_diffuse'] = kd * surf_interp.SW
     down_pt['SW_diffuse'] = row.svf * surf_interp.SW_diffuse
     surf_interp['SW_direct'] = surf_interp.SW - surf_interp.SW_diffuse
+    # ERA5 ssrd is an accumulation over the previous hour while SWtoa is evaluated at one instant, so around
+    # sunrise/sunset SW_direct can exceed SWtoa. This gives a negative ka and, once scaled by
+    # cos_illumination / mu0 on steep slopes, SW_direct spikes above the solar constant. Cap it at SWtoa.
+    # (Same as upstream ArcticSnow/TopoPyScale 48c07bd.)
+    surf_interp['SW_direct'] = surf_interp['SW_direct'].clip(max=SWtoa)
     ka = surf_interp.ssrd * 0
     ka[~sunset] = (g * mu0[~sunset] / down_pt.p) * np.log(SWtoa[~sunset] / surf_interp.SW_direct[~sunset])
     down_pt['cos_illumination'] = sg.cos_illumination(mu0, solar_pt.zenith, solar_pt.azimuth, row.slope, row.aspect)
