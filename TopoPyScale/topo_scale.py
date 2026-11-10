@@ -46,6 +46,7 @@ from types import SimpleNamespace
 import datetime as dt
 from TopoPyScale import meteo_util as mu
 from TopoPyScale import topo_utils as tu
+from TopoPyScale import solar_geom as sg
 from cdo import *
 import os, glob
 from pathlib import Path
@@ -289,11 +290,8 @@ def pt_downscale_radiations(row, ds_solar, horizon_da, meta, output_dir):
     # pdb.set_trace()
     ka[~sunset] = (g * mu0[~sunset] / down_pt.p) * np.log(SWtoa[~sunset] / surf_interp.SW_direct[~sunset])
     # Illumination angle
-    down_pt['cos_illumination_tmp'] = mu0 * np.cos(row.slope) + np.sin(ds_solar.zenith) * \
-                                      np.sin(row.slope) * np.cos(ds_solar.azimuth - row.aspect)
-    down_pt['cos_illumination'] = down_pt.cos_illumination_tmp * (
-            down_pt.cos_illumination_tmp > 0)  # remove selfdowing ccuring when |Solar.azi - aspect| > 90
-    down_pt = down_pt.drop(['cos_illumination_tmp'])
+    # remove self-shadowing occurring when |Solar.azi - aspect| > 90 (conventions: see solar_geom.cos_illumination)
+    down_pt['cos_illumination'] = sg.cos_illumination(mu0, ds_solar.zenith, ds_solar.azimuth, row.slope, row.aspect)
     illumination_mask = down_pt['cos_illumination'] < 0
     illumination_mask = illumination_mask.compute()
     down_pt['cos_illumination'][illumination_mask] = 0

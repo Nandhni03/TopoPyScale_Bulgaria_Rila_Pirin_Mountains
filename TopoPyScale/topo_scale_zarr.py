@@ -62,6 +62,7 @@ except ImportError:
         from zarr import Blosc as BloscCodec
 
 from TopoPyScale import meteo_util as mu
+from TopoPyScale import solar_geom as sg
 from TopoPyScale import topo_utils as tu
 
 g = 9.81      # Acceleration of gravity [ms^-1]
@@ -238,10 +239,7 @@ def downscale_point(row, plev_pt, surf_pt, solar_pt, horizon_values, meta):
     surf_interp['SW_direct'] = surf_interp.SW - surf_interp.SW_diffuse
     ka = surf_interp.ssrd * 0
     ka[~sunset] = (g * mu0[~sunset] / down_pt.p) * np.log(SWtoa[~sunset] / surf_interp.SW_direct[~sunset])
-    down_pt['cos_illumination_tmp'] = mu0 * np.cos(row.slope) + np.sin(solar_pt.zenith) * \
-                                      np.sin(row.slope) * np.cos(solar_pt.azimuth - row.aspect)
-    down_pt['cos_illumination'] = down_pt.cos_illumination_tmp * (down_pt.cos_illumination_tmp > 0)
-    down_pt = down_pt.drop_vars(['cos_illumination_tmp'])
+    down_pt['cos_illumination'] = sg.cos_illumination(mu0, solar_pt.zenith, solar_pt.azimuth, row.slope, row.aspect)
     down_pt['cos_illumination'][down_pt['cos_illumination'] < 0] = 0
 
     shade = xr.DataArray(horizon_values, dims='time', coords={'time': solar_pt.time}) > solar_pt.elevation

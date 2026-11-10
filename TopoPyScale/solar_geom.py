@@ -15,6 +15,34 @@ from TopoPyScale import topo_export as te
 from pathlib import Path
 
 
+def cos_illumination(mu0, zenith, azimuth, slope, aspect):
+    """
+    Cosine of the angle between the sun and the normal of a tilted surface (0 when the sun is behind the slope).
+
+    Angle conventions (Dozier / IPW, used consistently in TopoPyScale):
+      - azimuth: solar azimuth [rad], 0 towards SOUTH, positive towards EAST, negative towards west
+        (solar_geom.get_solar_geom stores 180 - pvlib azimuth).
+      - aspect: slope aspect [rad], same reference: 0 = south-facing, pi/2 = east-facing, pi = north-facing,
+        3*pi/2 (= -pi/2) = west-facing. This is what topocalc.gradient.gradient_d8(aspect_rad=False) returns
+        (in degrees) for a north-up DEM, i.e. with dy < 0 as passed by topo_param.compute_dem_param.
+      - slope [rad], zenith [rad], mu0 = cos(zenith).
+
+    Args:
+        mu0, zenith, azimuth: solar geometry (scalars, numpy arrays or DataArrays)
+        slope, aspect: surface geometry [rad]
+    Returns:
+        cos of the illumination angle, clipped at 0
+    """
+    c = mu0 * np.cos(slope) + np.sin(zenith) * np.sin(slope) * np.cos(azimuth - aspect)
+    return c * (c > 0)
+
+
+def aspect_to_bearing_deg(aspect):
+    """Convert a TopoPyScale aspect [rad, 0 = south, positive towards east] to a compass bearing
+    [deg clockwise from north, 0 = north-facing, 90 = east-facing]."""
+    return (180.0 - np.rad2deg(aspect)) % 360.0
+
+
 def get_solar_geom(df_position,
                    start_date,
                    end_date,
