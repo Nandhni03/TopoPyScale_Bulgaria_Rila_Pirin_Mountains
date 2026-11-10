@@ -1268,7 +1268,8 @@ def to_crocus(ds,
                     'date_created': dt.datetime.now().strftime('%Y/%m/%d %H:%M:%S')}
 
         fo['ZS'] = np.float64(df_pts.iloc[pt].elevation)
-        fo['aspect'] = np.float64(np.rad2deg(df_pts.iloc[pt].aspect))
+        # TopoPyScale aspect: rad, 0 = south, positive towards east -> SURFEX: degrees clockwise from north
+        fo['aspect'] = np.float64((180.0 - np.rad2deg(df_pts.iloc[pt].aspect)) % 360.0)
         fo['slope'] = np.float64(np.rad2deg(df_pts.iloc[pt].slope))
         fo['massif_number'] = np.float64(0)
         fo['LAT'] = df_pts.iloc[pt].latitude
@@ -1283,7 +1284,7 @@ def to_crocus(ds,
                          '_FillValue': -9999999.0}
         fo.UREF.attrs = {'units': 'm', 'standard_name': 'UREF', 'long_name': 'Reference_Height_for_Wind',
                          '_FillValue': -9999999.0}
-        fo.aspect.attrs = {'units': 'degree from north', 'standard_name': 'aspect', 'long_name': 'slope aspect',
+        fo.aspect.attrs = {'units': 'degrees clockwise from north', 'standard_name': 'aspect', 'long_name': 'slope aspect (0 = north-facing, 90 = east-facing)',
                            '_FillValue': -9999999.0}
         fo.slope.attrs = {'units': 'degrees from horizontal', 'standard_name': 'slope', 'long_name': 'slope angle',
                           '_FillValue': -9999999.0}
@@ -1416,7 +1417,8 @@ def to_surfex(ds,
 
         ds_pts = xr.Dataset(df_pts).rename_dims({'dim_0':'Number_of_points'})
         fo['ZS'] = (('Number_of_points'), np.float64(ds_pts.elevation.sel(Number_of_points=fo.Number_of_points).values))
-        fo['aspect'] = (('Number_of_points'), np.float64(np.rad2deg(ds_pts.aspect.sel(Number_of_points=fo.Number_of_points).values)))
+        # TopoPyScale aspect: rad, 0 = south, positive towards east -> SURFEX: degrees clockwise from north
+        fo['aspect'] = (('Number_of_points'), np.float64((180.0 - np.rad2deg(ds_pts.aspect.sel(Number_of_points=fo.Number_of_points).values)) % 360.0))
         fo['slope'] = (('Number_of_points'), np.float64(np.rad2deg(ds_pts.slope.sel(Number_of_points=fo.Number_of_points).values)))
         fo['massif_number'] = (('Number_of_points'), np.zeros(fo.ZS.shape) + np.float64(0))
         fo['LAT'] = (('Number_of_points'), ds_pts.latitude.sel(Number_of_points=fo.Number_of_points).values)
@@ -1432,7 +1434,7 @@ def to_surfex(ds,
                          '_FillValue': -9999999.0}
         fo.UREF.attrs = {'units': 'm', 'standard_name': 'UREF', 'long_name': 'Reference_Height_for_Wind',
                          '_FillValue': -9999999.0}
-        fo.aspect.attrs = {'units': 'degree from north', 'standard_name': 'aspect', 'long_name': 'slope aspect',
+        fo.aspect.attrs = {'units': 'degrees clockwise from north', 'standard_name': 'aspect', 'long_name': 'slope aspect (0 = north-facing, 90 = east-facing)',
                            '_FillValue': -9999999.0}
         fo.slope.attrs = {'units': 'degrees from horizontal', 'standard_name': 'slope', 'long_name': 'slope angle',
                           '_FillValue': -9999999.0}
