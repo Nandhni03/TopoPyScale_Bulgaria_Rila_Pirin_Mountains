@@ -117,6 +117,8 @@ def extract_pts_param(df_pts, ds_param, method='nearest'):
                               )
             dw = xr.Dataset.weighted(ds_param_pt, da_idw)
             d_mini = dw.sum(['x', 'y'], keep_attrs=True)
+            # aspect is circular: weighted mean of the unit vectors, not of the angles (which wraps at south)
+            d_mini['aspect'] = np.mod(np.arctan2(d_mini.aspect_sin, d_mini.aspect_cos), 2 * np.pi)
             df_pts.loc[row.Index, ['elevation', 'slope', 'aspect', 'aspect_cos', 'aspect_sin', 'svf']] = np.array((d_mini.elevation.values,
                                                                                                    d_mini.slope.values,
                                                                                                    d_mini.aspect.values,

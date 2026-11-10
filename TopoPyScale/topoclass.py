@@ -462,6 +462,11 @@ class Topoclass(object):
             for var in df_param.drop(flist, axis=1).columns:
                 self.toposub.df_centroids[var] = tmp[var]
         self.toposub.df_centroids['cluster_labels'] = tmp.index.values.astype(int)
+        # aspect is circular: replace the arithmetic mean (wraps at south) by the circular mean of the pixels
+        circ = ts.circular_mean_aspect(df_param)
+        self.toposub.df_centroids['aspect'] = circ.aspect
+        self.toposub.df_centroids['aspect_R'] = circ.aspect_R
+        self.toposub.df_centroids['flat'] = self.toposub.df_centroids.slope < np.deg2rad(ts.FLAT_SLOPE_DEG)
         n_digits = len(str(self.toposub.df_centroids.cluster_labels.max()))
         self.toposub.df_centroids['point_name'] = self.toposub.df_centroids.cluster_labels.astype(int).astype(str).str.zfill(n_digits)
         self.toposub.df_centroids['point_ind'] = self.toposub.df_centroids.cluster_labels.astype(int)

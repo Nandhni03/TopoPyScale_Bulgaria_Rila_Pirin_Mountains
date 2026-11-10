@@ -37,6 +37,29 @@ def ds_to_indexed_dataframe(ds):
     return tu.ds_to_indexed_dataframe(ds)
 
 
+FLAT_SLOPE_DEG = 5.0   # clusters with a mean slope below this have no meaningful aspect (flag 'flat')
+
+
+def circular_mean_aspect(df_param, by='cluster_labels'):
+    """
+    Circular mean of the pixel aspect per cluster.
+
+    Aspect is an angle (0 = south, positive towards east, in [0, 2*pi)): its arithmetic mean wraps at south, so a
+    cluster of pixels facing 10 deg east and 10 deg west of south averages to north. The mean is taken on the unit
+    vectors instead (pixel aspect_cos / aspect_sin).
+
+    Args:
+        df_param (dataframe): pixel table with columns aspect_cos, aspect_sin and `by`
+        by (str): cluster label column
+    Returns:
+        dataframe indexed by cluster label: aspect [rad, 0..2*pi], aspect_R = resultant length (0..1; 1 = all
+        pixels face the same way, near 0 = aspect undefined, e.g. a ridge or a valley bottom)
+    """
+    g = df_param.groupby(by)[['aspect_cos', 'aspect_sin']].mean()
+    return pd.DataFrame({'aspect': np.mod(np.arctan2(g.aspect_sin, g.aspect_cos), 2 * np.pi),
+                         'aspect_R': np.hypot(g.aspect_sin, g.aspect_cos)}, index=g.index)
+
+
 def scale_df(df_param,
              scaler=StandardScaler(),
              features={'x': 1, 'y': 1, 'elevation': 4, 'slope': 1, 'aspect_cos': 1, 'aspect_sin': 1, 'svf': 1}):

@@ -94,3 +94,15 @@ def test_horizon_azimuth_convention():
     z[70:75, :] = 1500.0                                     # rows increase southwards (north-up DEM)
     deg = {az: np.degrees(np.pi / 2 - np.arccos(horizon.horizon(az, z, DX)[50, 50])) for az in (0, 90, 180, -90)}
     assert deg[0] > 30 and deg[180] == pytest.approx(0) and deg[90] == pytest.approx(0)
+
+
+def test_circular_mean_aspect_wraps_at_south():
+    from TopoPyScale import topo_sub as ts
+    # cluster 0: pixels 10 deg either side of SOUTH (aspect 0 = 2*pi); cluster 1: either side of north (pi)
+    a = np.radians([10, 350, 170, 190])
+    df = pd.DataFrame({'cluster_labels': [0, 0, 1, 1], 'aspect': a, 'aspect_cos': np.cos(a), 'aspect_sin': np.sin(a)})
+    assert np.degrees(df.groupby('cluster_labels').aspect.mean()[0]) == pytest.approx(180)   # the old, wrong mean
+    c = ts.circular_mean_aspect(df)
+    assert np.degrees(c.aspect[0]) % 360 == pytest.approx(0, abs=1e-6) or np.degrees(c.aspect[0]) == pytest.approx(360)
+    assert np.degrees(c.aspect[1]) == pytest.approx(180)
+    assert c.aspect_R.values == pytest.approx(np.cos(np.radians(10)))
