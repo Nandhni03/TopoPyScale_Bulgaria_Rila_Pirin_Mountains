@@ -79,6 +79,19 @@ For each point (cluster centroid), in parallel on `CPU_cores` workers:
 Points are independent, so no locking is needed. If a run stops, rerun the same command: only
 points without a `.done` marker are computed.
 
+### Option: everything in Zarr, and a year filled month by month
+
+- **Caches as Zarr**: give the cache files `.zarr` names (`outputs.file.ds_param: ds_param.zarr`, same for
+  `ds_solar` and `da_horizon`). They are stored packed exactly like the NetCDF caches (int16 with
+  scale/offset, as `topo_export.to_netcdf` does), so results do not depend on the format
+  (`tests/test_zarr_caches.py`). `df_centroids` stays a pickle (a small table).
+- **One store, filled run by run**: set `outputs.file.zarr_store_start/_end` to the store's period (e.g. a
+  year) and run `downscale_climate` once per month with `project.start/end` set to that month (and
+  `ds_solar` covering the year). Each run writes only its own time slice; resume markers are kept per run
+  period in `<store>.progress/<YYYYMMDDHH>_<YYYYMMDDHH>/`. Filling a store in pieces gives exactly the
+  same values as one run (`tests/test_zarr_store_period.py`). A ready-made runner (with daily statistics
+  and GeoTIFFs per month) is `zarr_workflow/scripts/run_year.py` in the Rila–Pirin project repo.
+
 ## Setting it up for a new study area
 
 1. **Credentials**: an Earth Data Hub **classic** API key in `~/.netrc` (see
@@ -148,4 +161,5 @@ hourly.
 
 - bboxes crossing the 180° meridian are refused
 - the fetcher needs the domain inside the EDH coverage dates (1940 → about 2 weeks before today)
-- `split.IO` (time splitting in `Topoclass`) is not compatible with the Zarr path
+- `split.IO` (time splitting in `Topoclass`) is not compatible with the Zarr path; use the store period
+  option above instead

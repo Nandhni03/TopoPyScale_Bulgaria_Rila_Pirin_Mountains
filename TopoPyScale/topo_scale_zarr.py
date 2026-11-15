@@ -22,6 +22,10 @@ What changed compared to the 2025 version, and why:
     - errors were swallowed ("Error processing subset") -> the real exception propagates
     - output store recreated with mode='w' on every run -> resumable: existing store reused,
       finished points recorded in <store>.progress/ and skipped on rerun
+    - optional store period (store_start/store_end, 2026-10-13): the store can span a longer period
+      (e.g. a year) than one run (e.g. a month). Each run writes only its own time slice, with its own
+      progress markers (<store>.progress/<run start>_<run end>/), so a year is filled month by month
+      and a crash only repeats the current month. Without store_start/end nothing changes.
     - horizon angles: read from the `hori_azi_*` columns that Topoclass.compute_horizon()
       already sampled into df_centroids (same nearest-neighbour lookup as before, without
       re-reading the multi-GB horizon file for every point)
@@ -314,7 +318,8 @@ def _store_point(res, i, row):
         # region writes take only variables along the region dims; coordinates are already in the store
         out = out.drop_vars([v for v in out.variables if v in ('time', 'point_ind')
                              or not set(out[v].dims) & {'point_ind', 'time'}])
-        out.to_zarr(w['store'], region={'point_ind': slice(i, i + 1), 'time': slice(0, len(w['tvec']))},
+        t0 = w['t_offset']                  # position of this run's first timestep in the store
+        out.to_zarr(w['store'], region={'point_ind': slice(i, i + 1), 'time': slice(t0, t0 + len(w['tvec']))},
                     mode='r+', zarr_format=3, consolidated=False)
         (w['progress_dir'] / f'{i}.done').touch()
     else:
@@ -359,7 +364,9 @@ class ClimateDownscaler:
                  precip_lapse_rate_flag=False,
                  file_pattern='down_pt*.nc',
                  store_name=None,
-                 overwrite=False):
+                 overwrite=False,
+                 store_start=None,
+                 store_end=None):
         """
         Args:
             era5_zarr_path: input ERA5 Zarr store (see module docstring)
@@ -373,7 +380,12 @@ class ClimateDownscaler:
             varout (list): variables written to the Zarr store
             file_pattern (str): per-point netcdf output 'xxx_*.nc' (used when store_name is None)
             store_name (str): 'xxx.zarr' -> one Zarr store (point_ind, time) instead of netcdf files
-            overwrite (bool): False (default) resumes: finished points are skipped. True starts over.
+            overwrite (bool): False (default) resumes: finished points are skipped. True starts over
+                (deletes the whole store, also the parts written by other runs).
+            store_start, store_end: optional period of the output Zarr store (end day included), when it
+                is longer than this run, e.g. the year 2025 while this run does January. The store is
+                created for the whole period on the first run; each run fills its own time slice.
+                Default: the run period.
         """
         self.output_path = Path(output_path)
         self.output_path.mkdir(parents=True, exist_ok=True)
@@ -384,6 +396,20 @@ class ClimateDownscaler:
         self.varout = list(varout)
         self.overwrite = overwrite
         self.tvec = pd.date_range(start_date, pd.to_datetime(end_date) + pd.to_timedelta('1D'), freq=tstep, inclusive='left')
+        if (store_start is None) != (store_end is None):
+            raise ValueError('Give both store_start and store_end, or neither')
+        self.split_store = store_start is not None
+        if self.split_store:
+            self.store_tvec = pd.date_range(store_start, pd.to_datetime(store_end) + pd.to_timedelta('1D'),
+                                            freq=tstep, inclusive='left')
+            pos = self.store_tvec.get_indexer(self.tvec)
+            if (pos < 0).any() or not np.array_equal(pos, np.arange(pos[0], pos[0] + len(pos))):
+                raise ValueError(f'Run period {start_date}..{end_date} is not inside the store period '
+                                 f'{store_start}..{store_end}')
+            self.t_offset = int(pos[0])
+        else:
+            self.store_tvec = self.tvec
+            self.t_offset = 0
         tstep_dict = {'1h': 1, '3h': 3, '6h': 6}
         if tstep not in tstep_dict:
             raise ValueError(f'tstep must be one of {list(tstep_dict)}')
@@ -400,7 +426,12 @@ class ClimateDownscaler:
             self.output_format = 'zarr'
             self.store_name = store_name
             self.store = self.output_path / store_name
-            self.progress_dir = self.output_path / f'{store_name}.progress'
+            self.progress_root = self.output_path / f'{store_name}.progress'
+            if self.split_store:     # one marker folder per run period, e.g. 2025010100_2025013123
+                fmt = '%Y%m%d%H'
+                self.progress_dir = self.progress_root / f'{self.tvec[0]:{fmt}}_{self.tvec[-1]:{fmt}}'
+            else:
+                self.progress_dir = self.progress_root
         else:
             if not str(file_pattern).endswith('*.nc'):
                 raise ValueError("file_pattern must finish with *.nc")
@@ -429,22 +460,24 @@ class ClimateDownscaler:
         points = self.df_centroids.point_ind.values
         if self.store.exists() and self.overwrite:
             shutil.rmtree(self.store)
-            shutil.rmtree(self.progress_dir, ignore_errors=True)
+            shutil.rmtree(self.progress_root, ignore_errors=True)
         if self.store.exists():
             old = xr.open_zarr(self.store)
-            same = (old.sizes.get('time') == len(self.tvec) and np.array_equal(old.point_ind.values, points)
-                    and pd.Timestamp(old.time.values[0]) == self.tvec[0] and set(self.varout) <= set(old.data_vars))
+            same = (old.sizes.get('time') == len(self.store_tvec) and np.array_equal(old.point_ind.values, points)
+                    and pd.Timestamp(old.time.values[0]) == self.store_tvec[0]
+                    and set(self.varout) <= set(old.data_vars))
             if not same:
                 raise ValueError(f'{self.store} exists but was made for other points/period/variables. '
                                  f'Delete it or use overwrite=True.')
-            print(f'---> Reusing output store {self.store.name} (resume)')
+            print(f'---> Reusing output store {self.store.name} (resume'
+                  f'{"; this run fills " + str(self.tvec[0]) + " .. " + str(self.tvec[-1]) if self.split_store else ""})')
             return
-        shutil.rmtree(self.progress_dir, ignore_errors=True)
-        shape = (len(points), len(self.tvec))
-        chunks = (1, len(self.tvec))
+        shutil.rmtree(self.progress_root, ignore_errors=True)
+        shape = (len(points), len(self.store_tvec))
+        chunks = (1, len(self.store_tvec))
         ds = xr.Dataset(
             {v: (('point_ind', 'time'), da.full(shape, np.nan, chunks=chunks, dtype='float64')) for v in self.varout},
-            coords={'time': self.tvec, 'point_ind': points,
+            coords={'time': self.store_tvec, 'point_ind': points,
                     'point_name': ('point_ind', np.array(self.df_centroids.point_name.astype(str).tolist(), dtype='U'))})
         comp = BloscCodec(cname='lz4', clevel=5, shuffle='bitshuffle', blocksize=0)
         ds.attrs = {'title': 'Downscaled timeseries with TopoPyScale (topo_scale_zarr)',
@@ -472,7 +505,7 @@ class ClimateDownscaler:
                'meta': self.meta, 'varout': self.varout, 'output_format': self.output_format,
                'output_path': self.output_path}
         if self.output_format == 'zarr':
-            ctx.update(store=str(self.store), progress_dir=self.progress_dir)
+            ctx.update(store=str(self.store), progress_dir=self.progress_dir, t_offset=self.t_offset)
         else:
             ctx.update(file_pattern=self.file_pattern)
         return ctx

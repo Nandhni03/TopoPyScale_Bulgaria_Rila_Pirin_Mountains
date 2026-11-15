@@ -181,22 +181,22 @@ class Topoclass(object):
         else:
             print(f'-> WARNING: Centroid file {self.config.outputs.file.df_centroids} not found')
 
-        if (self.config.outputs.path / self.config.outputs.file.ds_param).is_file():
-            self.toposub.ds_param = xr.open_dataset(
+        if tu.dataset_exists(self.config.outputs.path / self.config.outputs.file.ds_param):
+            self.toposub.ds_param = tu.open_dataset(
                 self.config.outputs.path / self.config.outputs.file.ds_param)
             print(f'---> DEM parameter file {self.config.outputs.file.ds_param} exists and loaded')
         else:
             print(f'-> WARNING: DEM parameter file {self.config.outputs.file.ds_param} not found')
 
-        if (self.config.outputs.path / self.config.outputs.file.ds_solar).is_file():
-            self.ds_solar = xr.open_dataset(
+        if tu.dataset_exists(self.config.outputs.path / self.config.outputs.file.ds_solar):
+            self.ds_solar = tu.open_dataset(
                 self.config.outputs.path / self.config.outputs.file.ds_solar)
             print(f'---> Solar file {self.config.outputs.file.ds_solar} exists and loaded')
         else:
             print(f'-> WARNING: Solar file {self.config.outputs.file.ds_solar} not found')
 
-        if (self.config.outputs.path / self.config.outputs.file.da_horizon).is_file():
-            self.da_horizon = xr.open_dataarray(
+        if tu.dataset_exists(self.config.outputs.path / self.config.outputs.file.da_horizon):
+            self.da_horizon = tu.open_dataarray(
                 self.config.outputs.path / self.config.outputs.file.da_horizon)
             print(f'---> Horizon file {self.config.outputs.file.da_horizon} exists and loaded')
         else:
@@ -486,7 +486,7 @@ class Topoclass(object):
 
         # update file
         fname = self.config.outputs.path / self.config.outputs.file.ds_param
-        te.to_netcdf(self.toposub.ds_param, fname=fname)
+        te.save_dataset(self.toposub.ds_param, fname)        # 'xxx.zarr' -> Zarr store, else NetCDF
 
         # update plotting class variable
         self.plot.ds_param = self.toposub.ds_param
@@ -570,8 +570,8 @@ class Topoclass(object):
 
         else:
             fname = self.config.outputs.path / self.config.outputs.file.ds_solar
-            if fname.is_file():
-                self.ds_solar = xr.open_dataset(fname, chunks='auto', engine='h5netcdf')
+            if tu.dataset_exists(fname):
+                self.ds_solar = tu.open_dataset(fname, chunks='auto', engine='h5netcdf')
                 print(f'---> Solar file {self.config.outputs.file.ds_solar} exists and loaded')
             else:
                 self.ds_solar = sg.get_solar_geom(self.toposub.df_centroids,
@@ -588,8 +588,8 @@ class Topoclass(object):
         Function to compute horizon angle and sample values for list of points
         """
         fname = self.config.outputs.path / self.config.outputs.file.da_horizon
-        if fname.is_file():
-            self.da_horizon = xr.open_dataarray(fname, engine='h5netcdf')
+        if tu.dataset_exists(fname):
+            self.da_horizon = tu.open_dataarray(fname, engine='h5netcdf')
             print(f'---> Horizon file {self.config.outputs.file.da_horizon} exists and loaded')
         else:
             self.da_horizon = tp.compute_horizon(self.config.dem.filepath,
@@ -731,7 +731,11 @@ class Topoclass(object):
                             lw_terrain_flag=self.config.toposcale.LW_terrain_contribution,
                             precip_lapse_rate_flag=self.config.climate.precip_lapse_rate,
                             file_pattern=None if out_store else f_pattern,
-                            store_name=out_store
+                            store_name=out_store,
+                            # optional: the store covers a longer period (e.g. a year) than this run
+                            # (e.g. a month); the run fills its own time slice (see topo_scale_zarr)
+                            store_start=self.config.outputs.file.zarr_store_start or None,
+                            store_end=self.config.outputs.file.zarr_store_end or None
                     )
 
                 if self.config.project.parallelization.downscaling_method.lower() == 'multicore':

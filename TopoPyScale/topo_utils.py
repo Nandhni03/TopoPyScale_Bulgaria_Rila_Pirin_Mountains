@@ -367,3 +367,41 @@ def time_vecs(start_date, end_date):
     
     return start_year, end_year
 
+
+
+# ---------------------------------------------------------------------------------------------
+#   Cached intermediate files (ds_param, ds_solar, da_horizon) as NetCDF *or* Zarr
+#   The format follows the file name given in the config: 'xxx.zarr' -> Zarr store, else NetCDF.
+#   A Zarr store is a directory, so "does the cache exist" cannot use Path.is_file().
+# ---------------------------------------------------------------------------------------------
+
+def is_zarr(path):
+    """True if `path` names a Zarr store (by its '.zarr' suffix)."""
+    return str(path).rstrip('/').endswith('.zarr')
+
+
+def dataset_exists(path):
+    """True if a cached NetCDF file or a complete Zarr store exists at `path`."""
+    from pathlib import Path
+    path = Path(path)
+    if is_zarr(path):
+        return path.is_dir() and ((path / 'zarr.json').is_file() or (path / '.zgroup').is_file())
+    return path.is_file()
+
+
+def open_dataset(path, **kwargs):
+    """Open a cached NetCDF file or Zarr store. kwargs (e.g. engine, chunks) apply to NetCDF only,
+    except `chunks`, which is passed to both."""
+    if is_zarr(path):
+        return xr.open_zarr(str(path), chunks=kwargs.get('chunks', {}))
+    return xr.open_dataset(path, **kwargs)
+
+
+def open_dataarray(path, **kwargs):
+    """Open a single-variable cached NetCDF file or Zarr store as a DataArray (like xr.open_dataarray)."""
+    if is_zarr(path):
+        ds = xr.open_zarr(str(path), chunks=kwargs.get('chunks', {}))
+        if len(ds.data_vars) != 1:
+            raise ValueError(f'{path} holds {len(ds.data_vars)} variables, expected one')
+        return ds[list(ds.data_vars)[0]]
+    return xr.open_dataarray(path, **kwargs)

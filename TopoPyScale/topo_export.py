@@ -9,6 +9,7 @@ TODO;
 import csv
 import datetime as dt
 import pdb
+import shutil
 import sys, os
 
 import numpy as np
@@ -69,6 +70,67 @@ def to_netcdf(ds, fname='output.nc', variables=None, complevel=9):
     ds[variables].to_netcdf(fname, encoding=encod_dict, engine='h5netcdf')
 
     print(f'---> File {fname} saved')
+
+
+def _packing_encoding(ds, variables, n=10):
+    """Encoding used by to_netcdf: floats packed to int16 with scale/offset, ints and labels kept."""
+    encod_dict = {}
+    for var in variables:
+        if str(ds[var].dtype)[:3] == 'int' or var == 'cluster_labels' or var == 'point_name':
+            encod_dict.update({var: {'dtype': ds[var].dtype}})
+        else:
+            scale_factor, add_offset = compute_scaling_and_offset(ds[var], n=n)
+            encod_dict.update({var: {'dtype': 'int16', 'scale_factor': scale_factor, 'add_offset': add_offset}})
+    return encod_dict
+
+
+def to_zarr(ds, fname='output.zarr', variables=None, pack=True, clevel=5):
+    """
+    Save a dataset to a Zarr store (Zarr format 3), the Zarr counterpart of to_netcdf().
+
+    With pack=True the variables are stored exactly as to_netcdf() stores them (floats packed to
+    int16 with the same scale_factor/add_offset), so a Zarr cache and a NetCDF cache decode to
+    identical numbers. pack=False keeps the original dtypes (used for da_horizon, which the
+    authors also write unpacked).
+
+    The store is written next to the target and renamed into place, so an interrupted write never
+    leaves a store that looks complete. If the target exists (e.g. ds_param rewritten after
+    clustering while it is still open lazily), the data are loaded into memory first.
+    """
+    from pathlib import Path
+    from zarr.codecs import BloscCodec
+    fname = Path(fname)
+    if variables is None:
+        variables = list(ds.keys())
+    ds = ds[variables]
+    if fname.exists():
+        ds = ds.load()
+    ds = ds.copy()
+    for v in ds.variables:                  # object strings (point_name, cluster_labels) -> fixed width
+        ds[v].encoding = {}
+        if ds[v].dtype.kind == 'O':
+            ds[v] = ds[v].astype(str)
+    comp = BloscCodec(cname='zstd', clevel=clevel, shuffle='bitshuffle')
+    encoding = _packing_encoding(ds, variables) if pack else {v: {} for v in variables}
+    for v in variables:
+        encoding[v]['compressors'] = comp
+    tmp = fname.with_name(fname.name + '.part')
+    shutil.rmtree(tmp, ignore_errors=True)
+    ds.to_zarr(tmp, mode='w', zarr_format=3, consolidated=True, encoding=encoding)
+    if fname.exists():
+        shutil.rmtree(fname)
+    tmp.rename(fname)
+    print(f'---> Store {fname} saved')
+
+
+def save_dataset(ds, fname, variables=None, pack=True):
+    """Write a cache file in the format its name asks for: 'xxx.zarr' -> to_zarr, else to_netcdf."""
+    if str(fname).rstrip('/').endswith('.zarr'):
+        to_zarr(ds, fname, variables=variables, pack=pack)
+    elif pack:
+        to_netcdf(ds, fname=fname, variables=variables)
+    else:
+        (ds if variables is None else ds[variables]).to_netcdf(fname)
 
 
 def to_musa(ds,

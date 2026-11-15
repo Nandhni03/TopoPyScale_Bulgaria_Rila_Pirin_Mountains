@@ -95,7 +95,7 @@ def get_solar_geom(df_position,
     ds.SWtoa.attrs = {'units': 'W/m**2', 'standard_name': 'Shortwave radiations downward top of the atmosphere'}
     ds.sunset.attrs = {'units': 'bool', 'standard_name': 'Sunset'}
 
-    te.to_netcdf(ds, fname=project_ouput /fname)
+    te.save_dataset(ds, Path(project_ouput) / fname)   # 'xxx.zarr' -> Zarr store, else NetCDF
 
     return ds
 

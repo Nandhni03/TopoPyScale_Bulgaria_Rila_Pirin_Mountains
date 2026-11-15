@@ -140,12 +140,14 @@ outputs:
     clean_outputs: False                # (bool)    remove the entire outputs/ directory prior to downscaling
     clean_FSM: True                     # (bool)    remove the entire sim/ directory
     df_centroids: df_centroids.pck      # (pickle)  dataframe containing the points of interest with their topographic features
-    ds_param: ds_param.nc               # (netcdf)  topographic parameters (slope, aspect, etc.)
-    ds_solar: ds_solar.nc               # (netcdf)  solar geometry
-    da_horizon: da_horizon.nc           # (netcdf)  horizon angles
+    ds_param: ds_param.nc               # (netcdf)  topographic parameters (slope, aspect, etc.). Name it xxx.zarr to cache it as a Zarr store
+    ds_solar: ds_solar.nc               # (netcdf)  solar geometry (xxx.zarr -> Zarr store)
+    da_horizon: da_horizon.nc           # (netcdf)  horizon angles (xxx.zarr -> Zarr store)
     landform: landform.tif              # (geotiff) rasters of of cluster labels, [TopoSub]
     downscaled_pt: down_pt_*.nc         # (netcdf)  filename of the downscaled timeseries
     zarr_store: down.zarr               # (zarr)    downscaled timeseries in one Zarr store (point_ind, time) when the ERA5 input is Zarr. Leave empty to get one netcdf per point (downscaled_pt)
+    zarr_store_start:                   # optional: period of zarr_store when it is longer than this run (e.g. a year,
+    zarr_store_end:                     #   while project.start/end is one month). Each run fills its own time slice.
 
 clean_up:
   rm_tmp_dirs: True                   # (optional: bool) remove the created tmp directories after downscaling?
@@ -247,12 +249,13 @@ The file `config.yml` is parsed by TopoPyScale at the time the class `topoclass(
 | clean_outputs | True               | yes      | True, False         | remove all files from `/outputs/` folder prior to downscaling. If `False` all files in `outputs/` are kept, but `outputs/tmp/` is removed. `False` can be used to speed up job if computing DEM morphometrics, solar geometries, and horizons have been done. |
 | clean_FSM     | True               | yes      | True, False         | remove all files from `/fsm_sims/` folder prior to downscaling and running FSM. If false, existing files will not be deleted.                                                                                                                                 |
 | df_centroids  | df_centroids.pck   | yes      | `*.pck`             | filename to store dataframe of the points/centroids downscaling takes place . File is saved in `outputs/`                                                                                                                                                     |
-| ds_param      | ds_param.nc        | yes      | `*.nc`              | filename to store dataset of the DEM morphometric and cluster/centroid labels map. File is saved in `outputs/`                                                                                                                                                |
-| ds_solar      | ds_solar.nc        | yes      | `*.nc`              | filename to store dataset of the solar geometry of DEM. File is saved in `outputs/`                                                                                                                                                                           |
-| da_horizon    | da_horizon.nc      | yes      | `*.nc`              | filename to store DataArray of the DEM horizons. File is saved in `outputs/`                                                                                                                                                                                  |
+| ds_param      | ds_param.nc        | yes      | `*.nc`, `*.zarr`    | filename to store dataset of the DEM morphometric and cluster/centroid labels map. File is saved in `outputs/`                                                                                                                                                |
+| ds_solar      | ds_solar.nc        | yes      | `*.nc`, `*.zarr`    | filename to store dataset of the solar geometry of DEM. File is saved in `outputs/`                                                                                                                                                                           |
+| da_horizon    | da_horizon.nc      | yes      | `*.nc`, `*.zarr`    | filename to store DataArray of the DEM horizons. File is saved in `outputs/`                                                                                                                                                                                  |
 | landform      | landform.tif       | no       | `*.tif`             | filename to store raster of the points/centroids downscaling map. File is saved in `outputs/`                                                                                                                                                                 |
 | downscaled_pt | down_pt_*.nc       | yes      | `*.nc`              | filename to store dataset of the dowsncaled points/centroids. File is saved in `outputs/`                                                                                                                                                                     |
 | zarr_store  | down.zarr    | no    | string    | name of the zarr store for the downscaled timeseries (optional, only working with Dask)   |
+| zarr_store_start, zarr_store_end | (empty) | no | date | period of `zarr_store` if longer than the run period: the store is created for this period and every run (e.g. one per month) fills only its own time slice, with its own resume markers. `.zarr` cache names (ds_param, ds_solar, da_horizon) are stored packed exactly like the NetCDF caches |
 ### clean_up
 
 | Field           | Example Value | Required | Possible Values | Description                                                                         |

@@ -18,6 +18,7 @@ from multiprocessing.dummy import Pool as ThreadPool
 import multiprocessing as mproc
 import shutil
 from TopoPyScale import topo_export as te
+from TopoPyScale import topo_utils as tu
 from pathlib import Path
 
 
@@ -185,10 +186,10 @@ def compute_dem_param(dem_file, fname='ds_param.nc', project_directory=Path('./'
     """
     pdir = project_directory
     file_ds = pdir / output_folder / fname
-    if file_ds.is_file():
+    if tu.dataset_exists(file_ds):          # NetCDF file or Zarr store (by the name's suffix)
         print(f'\n---> Dataset {fname} found.')
         try:
-            ds = xr.open_dataset(file_ds)
+            ds = tu.open_dataset(file_ds)
             # Test if we can actually read the elevation data
             _ = ds.elevation.values
         except (RuntimeError, OSError) as e:
@@ -268,7 +269,16 @@ def compute_dem_param(dem_file, fname='ds_param.nc', project_directory=Path('./'
     ds.aspect_sin.attrs = {'units': 'sinus'}
     ds.svf.attrs = {'units': 'ratio', 'standard_name': 'svf', 'long_name': 'Sky view factor'}
 
-    if file_ds.is_file():
+    if tu.is_zarr(file_ds):
+        # Same behaviour as the NetCDF branches below: a store that existed is rewritten and reopened;
+        # a new one is written and the in-memory (unpacked) dataset is returned, so a fresh run
+        # clusters on the same values as with NetCDF. te.to_zarr writes a temporary store and renames
+        # it into place, and loads the data first if it rewrites the store it was read from.
+        existed = tu.dataset_exists(file_ds)
+        te.save_dataset(ds, file_ds)
+        if existed:
+            ds = tu.open_dataset(file_ds)
+    elif file_ds.is_file():
         te.to_netcdf(ds, fname=pdir / output_folder / 'tmp' / fname)
         ds = None
         shutil.move(pdir / output_folder / 'tmp' /fname, file_ds)
@@ -333,7 +343,8 @@ def compute_horizon(dem_file, azimuth_inc=30, num_threads=None, fname='da_horizo
                       }
                       )
     #te.to_netcdf(da.to_dataset(), fname=output_directory / fname)
-    da.to_dataset().to_netcdf(output_directory / fname)
+    # unpacked, as before; 'xxx.zarr' -> Zarr store, else NetCDF
+    te.save_dataset(da.to_dataset(), Path(output_directory) / fname, pack=False)
     return da
 
 
