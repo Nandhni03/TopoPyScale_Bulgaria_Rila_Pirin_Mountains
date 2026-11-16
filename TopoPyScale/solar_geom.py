@@ -23,7 +23,8 @@ def get_solar_geom(df_position,
                    num_threads=None,
                    fname='ds_solar.nc',
                    project_ouput=Path('./'),
-                   method_solar='nrel_numpy'):
+                   method_solar='nrel_numpy',
+                   mid_interval=True):
     """
     Function to compute solar position for each location given in the dataframe
     azimuth is define with 0 towards South, negative in W-dir, and posiive towards E-dir
@@ -37,6 +38,13 @@ def get_solar_geom(df_position,
         num_threads (int): number of threads to parallelize computation on. default is number of core -2
         fname (str): name of netcdf file to store solar geometry
         project_ouput (str): path to project root directory
+        mid_interval (bool): compute the sun position at the middle of each time step (t - tstep/2), labels kept
+            at t. ERA5 radiation at stamp t is the mean over (t - tstep, t], so the geometry that matches it is the
+            one at mid-interval; at the stamp the sun is half a step late (W-facing slopes got ~10-17 W/m2 more
+            winter SW than E-facing). False = the former behaviour. (2026-11-15; same as A. Ionita 419d085.)
+
+    The dataset is stored UNPACKED (float32). The former int16 packing (10 bits) gave a run that read the cache
+    other SW values than a run that computed the geometry, most at low sun (rila_pirin_zarr/LOG.md 2026-11-10).
 
     Returns: 
         dataset: solar angles in degrees
@@ -49,6 +57,8 @@ def get_solar_geom(df_position,
     # tstep_dict = {'1h': 1, '3h': 3, '6h': 6}
 
     times = pd.date_range(start_date, pd.to_datetime(end_date)+pd.to_timedelta('1D'), freq=tstep, tz='UTC', inclusive='left')
+    if mid_interval:
+        times = times - pd.to_timedelta(tstep) / 2       # sun at mid-interval; the dataset keeps the labels t
 
 
     df_pool = pd.DataFrame()
@@ -95,7 +105,11 @@ def get_solar_geom(df_position,
     ds.SWtoa.attrs = {'units': 'W/m**2', 'standard_name': 'Shortwave radiations downward top of the atmosphere'}
     ds.sunset.attrs = {'units': 'bool', 'standard_name': 'Sunset'}
 
-    te.save_dataset(ds, Path(project_ouput) / fname)   # 'xxx.zarr' -> Zarr store, else NetCDF
+    ds.attrs['solar_time_offset'] = (f'sun position at t - {tstep}/2 (mid-interval of ERA5 accumulations)'
+                                     if mid_interval else 'sun position at the time stamp t')
+    for v in ('zenith', 'azimuth', 'elevation', 'mu0', 'SWtoa'):
+        ds[v] = ds[v].astype('float32')
+    te.save_dataset(ds, Path(project_ouput) / fname, pack=False)   # unpacked float32; 'xxx.zarr' -> Zarr, else NetCDF
 
     return ds
 

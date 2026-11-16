@@ -127,48 +127,17 @@ def pt_downscale_interp(row, ds_plev_pt, ds_surf_pt, meta):
             'point_name': pt_id
     })
 
-    if (row.elevation < plev_interp.z.isel(level=-1)).sum():
-        pt_elev_diff = np.round(np.min(row.elevation - plev_interp.z.isel(level=-1).values), 0)
-        print(f"---> WARNING: Point {pt_id} is {pt_elev_diff} m lower than the {plev_interp.isel(level=-1).level.data} hPa geopotential\n=> "
-                  "Values sampled from Psurf and lowest Plevel. No vertical interpolation")
-        
-        ind_z_top = (plev_interp.where(plev_interp.z > row.elevation).z - row.elevation).argmin('level')
-        top = plev_interp.isel(level=ind_z_top)
-
-        down_pt['t'] = top['t']
-        down_pt['u'] = top.u
-        down_pt['v'] = top.v
-        down_pt['q'] = top.q
-        down_pt['p'] = top.level * (10 ** 2) * np.exp(
-                -(row.elevation - top.z) / (0.5 * (top.t + down_pt.t) * R / g))  # Pressure in bar
-
-    else:
-        # ========== Vertical interpolation at the DEM surface z  ===============
-        ind_z_bot = (plev_interp.where(plev_interp.z < row.elevation).z - row.elevation).argmax('level')
-
-        # In case upper pressure level elevation is not high enough, stop process and print error
-        try:
-            ind_z_top = (plev_interp.where(plev_interp.z > row.elevation).z - row.elevation).argmin('level')
-        except:
-            raise ValueError(
-                f'ERROR: Upper pressure level {plev_interp.level.min().values} hPa geopotential is lower than cluster mean elevation {row.elevation} {plev_interp.z}')
-
-        top = plev_interp.isel(level=ind_z_top)
-        bot = plev_interp.isel(level=ind_z_bot)
-
-        # Preparing interpolation weights for linear interpolation =======================
-        dist = np.array([np.abs(bot.z - row.elevation).values, np.abs(top.z - row.elevation).values])
-        # idw = 1/dist**2
-        # weights = idw / np.sum(idw, axis=0)
-        weights = dist / np.sum(dist, axis=0)
-
-        # ============ Creating a dataset containing the downscaled timeseries ========================
-        down_pt['t'] = bot.t * weights[1] + top.t * weights[0]
-        down_pt['u'] = bot.u * weights[1] + top.u * weights[0]
-        down_pt['v'] = bot.v * weights[1] + top.v * weights[0]
-        down_pt['q'] = bot.q * weights[1] + top.q * weights[0]
-        down_pt['p'] = top.level * (10 ** 2) * np.exp(
-                -(row.elevation - top.z) / (0.5 * (top.t + down_pt.t) * R / g))  # Pressure in bar
+    # Vertical interpolation decided per time step (2026-11-15), see topo_utils.vertical_interp_plev
+    top, vals, below_all = tu.vertical_interp_plev(plev_interp, row.elevation)
+    if bool(below_all.any()):
+        print(f"---> Point {pt_id}: below the {plev_interp.level.values[-1]} hPa geopotential at "
+              f"{int(below_all.sum())} time steps => lowest-level values at those steps only")
+    down_pt['t'] = vals['t']
+    down_pt['u'] = vals['u']
+    down_pt['v'] = vals['v']
+    down_pt['q'] = vals['q']
+    down_pt['p'] = top.level * (10 ** 2) * np.exp(
+            -(row.elevation - top.z) / (0.5 * (top.t + down_pt.t) * R / g))  # Pressure in bar
 
         # ======= logic  to compute ws, wd without loading data in memory, and maintaining the power of dask
     down_pt['month'] = ('time', down_pt.time.dt.month.data)
@@ -284,6 +253,8 @@ def pt_downscale_radiations(row, ds_solar, horizon_da, meta, output_dir):
     down_pt['SW_diffuse'] = row.svf * surf_interp.SW_diffuse
 
     surf_interp['SW_direct'] = surf_interp.SW - surf_interp.SW_diffuse
+    # Cap SW_direct at SWtoa (upstream TopoPyScale 48c07bd, 2026-11-05), see topo_scale_zarr.py
+    surf_interp['SW_direct'] = surf_interp['SW_direct'].clip(max=SWtoa)
     # scale direct solar radiation using Beer's law (see Aalstad 2019, Appendix A)
     ka = surf_interp.ssrd * 0
     # pdb.set_trace()
@@ -311,7 +282,7 @@ def pt_downscale_radiations(row, ds_solar, horizon_da, meta, output_dir):
 
     # currently drop azimuth and level as they are coords. Could be passed to variables instead.
     # round(5) required to sufficiently represent specific humidty, q (eg typical value 0.00078)
-    down_pt = down_pt.drop(['level']).round(5)
+    down_pt = down_pt.drop_vars(['level'], errors='ignore').round(5)
 
     # adding metadata
     down_pt.LW.attrs = {'units': 'W m**-2', 'long_name': 'Surface longwave radiation downwards',

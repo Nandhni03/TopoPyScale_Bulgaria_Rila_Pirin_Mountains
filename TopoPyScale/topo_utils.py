@@ -405,3 +405,51 @@ def open_dataarray(path, **kwargs):
             raise ValueError(f'{path} holds {len(ds.data_vars)} variables, expected one')
         return ds[list(ds.data_vars)[0]]
     return xr.open_dataarray(path, **kwargs)
+
+
+# ---------------------------------------------------------------------------------------------
+#   Vertical interpolation between pressure levels, decided per time step (2026-11-15)
+# ---------------------------------------------------------------------------------------------
+def vertical_interp_plev(plev, elevation, variables=('t', 'u', 'v', 'q')):
+    """
+    Values of the pressure-level fields at the height `elevation`, per time step.
+
+    At every time step, linear interpolation in z between the nearest level below and the nearest level above
+    the point. Only at the time steps when the point lies below every level (below z of the lowest level),
+    the values of the lowest level are taken (no extrapolation, no lapse rate).
+
+    Before (upstream TopoPyScale): if the point was below the lowest level at ANY time step of the period being
+    downscaled, the whole period used the values of the nearest level above, without interpolation. Low points
+    then depended on the period of the run (a month vs a year) and switched between runs. Same fix as A. Ionita's
+    commit 0631d84 (branch fix/aspect-azimuth-convention, not published), re-implemented from his description.
+    Interpolated steps are bit-identical to the former interpolation branch, steps below every level are
+    bit-identical to the former fallback branch.
+
+    Args:
+        plev (Dataset): pressure-level fields of the point (dims time, level), with z [m] and `variables`
+        elevation (float): point elevation [m]
+        variables (tuple): variables to interpolate
+    Returns:
+        top (Dataset): the nearest level above at each time step (for the pressure formula)
+        out (dict): variable -> DataArray (time)
+        below_all (DataArray bool, time): True at the steps when the point is below every level
+    """
+    z = plev.z
+    above = z > elevation
+    if not bool(above.any('level').all()):
+        raise ValueError(f'ERROR: Upper pressure level {plev.level.min().values} hPa geopotential is lower than '
+                         f'the point elevation {elevation} at some time step')
+    below = z < elevation
+    has_bot = below.any('level')
+    ind_top = (z.where(above) - elevation).argmin('level')
+    ind_bot = (z.where(below) - elevation).fillna(-np.inf).argmax('level')   # -inf: steps without a level below
+    top = plev.isel(level=ind_top)
+    bot = plev.isel(level=ind_bot)
+    dist = np.array([np.abs(bot.z - elevation).values, np.abs(top.z - elevation).values])
+    with np.errstate(invalid='ignore', divide='ignore'):
+        weights = dist / np.sum(dist, axis=0)         # the former formula; only used where has_bot
+    out = {}
+    for v in variables:
+        interp = bot[v] * weights[1] + top[v] * weights[0]
+        out[v] = xr.where(has_bot, interp, top[v])
+    return top, out, ~has_bot

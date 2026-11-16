@@ -152,36 +152,21 @@ def downscale_point(row, plev_pt, surf_pt, solar_pt, horizon_values, meta):
 
     down_pt = xr.Dataset(coords={'time': plev_interp.time, 'point_name': pt_id})
 
-    if (row.elevation < plev_interp.z.isel(level=-1)).sum():
-        pt_elev_diff = np.round(np.min(row.elevation - plev_interp.z.isel(level=-1).values), 0)
-        print(f"---> WARNING: Point {pt_id} is {pt_elev_diff} m lower than the {plev_interp.isel(level=-1).level.data} hPa geopotential\n=> "
-              "Values sampled from Psurf and lowest Plevel. No vertical interpolation", flush=True)
-        vertical_fallback = True
-        ind_z_top = (plev_interp.where(plev_interp.z > row.elevation).z - row.elevation).argmin('level')
-        top = plev_interp.isel(level=ind_z_top)
-        down_pt['t'] = top['t']
-        down_pt['u'] = top.u
-        down_pt['v'] = top.v
-        down_pt['q'] = top.q
-        down_pt['p'] = top.level * (10 ** 2) * np.exp(-(row.elevation - top.z) / (0.5 * (top.t + down_pt.t) * R / g))
-    else:
-        vertical_fallback = False
-        # ========== Vertical interpolation at the DEM surface z  ===============
-        ind_z_bot = (plev_interp.where(plev_interp.z < row.elevation).z - row.elevation).argmax('level')
-        try:
-            ind_z_top = (plev_interp.where(plev_interp.z > row.elevation).z - row.elevation).argmin('level')
-        except Exception as e:
-            raise ValueError(f'ERROR: Upper pressure level {plev_interp.level.min().values} hPa geopotential is '
-                             f'lower than cluster mean elevation {row.elevation}') from e
-        top = plev_interp.isel(level=ind_z_top)
-        bot = plev_interp.isel(level=ind_z_bot)
-        dist = np.array([np.abs(bot.z - row.elevation).values, np.abs(top.z - row.elevation).values])
-        weights = dist / np.sum(dist, axis=0)
-        down_pt['t'] = bot.t * weights[1] + top.t * weights[0]
-        down_pt['u'] = bot.u * weights[1] + top.u * weights[0]
-        down_pt['v'] = bot.v * weights[1] + top.v * weights[0]
-        down_pt['q'] = bot.q * weights[1] + top.q * weights[0]
-        down_pt['p'] = top.level * (10 ** 2) * np.exp(-(row.elevation - top.z) / (0.5 * (top.t + down_pt.t) * R / g))
+    # ========== Vertical interpolation at the point elevation, decided per time step (2026-11-15) ==========
+    # Formerly: a point below z(lowest level) at ANY step took the nearest level above, uninterpolated, for the
+    # whole period. Now: interpolated wherever it lies between two levels; lowest-level values only at the steps
+    # when it lies below every level. See topo_utils.vertical_interp_plev.
+    top, vals, below_all = tu.vertical_interp_plev(plev_interp, row.elevation)
+    n_below = int(below_all.sum())
+    vertical_fallback = n_below > 0
+    if vertical_fallback:
+        print(f"---> Point {pt_id}: below the {plev_interp.level.values[-1]} hPa geopotential at {n_below} of "
+              f"{below_all.size} time steps => lowest-level values at those steps only", flush=True)
+    down_pt['t'] = vals['t']
+    down_pt['u'] = vals['u']
+    down_pt['v'] = vals['v']
+    down_pt['q'] = vals['q']
+    down_pt['p'] = top.level * (10 ** 2) * np.exp(-(row.elevation - top.z) / (0.5 * (top.t + down_pt.t) * R / g))
 
     # ============ Precipitation, wind ============
     down_pt['month'] = ('time', down_pt.time.dt.month.data)
@@ -236,6 +221,10 @@ def downscale_point(row, plev_pt, surf_pt, solar_pt, horizon_values, meta):
     surf_interp['SW_diffuse'] = kd * surf_interp.SW
     down_pt['SW_diffuse'] = row.svf * surf_interp.SW_diffuse
     surf_interp['SW_direct'] = surf_interp.SW - surf_interp.SW_diffuse
+    # Cap SW_direct at SWtoa (upstream TopoPyScale 48c07bd, 2026-11-05; A. Ionita deaa6a9): near sunrise/sunset the
+    # hour-mean ssrd can exceed the instantaneous SWtoa, which gives a negative ka and, scaled by
+    # cos_illumination / mu0 on steep slopes, SW_direct spikes far above the solar constant.
+    surf_interp['SW_direct'] = surf_interp['SW_direct'].clip(max=SWtoa)
     ka = surf_interp.ssrd * 0
     ka[~sunset] = (g * mu0[~sunset] / down_pt.p) * np.log(SWtoa[~sunset] / surf_interp.SW_direct[~sunset])
     down_pt['cos_illumination_tmp'] = mu0 * np.cos(row.slope) + np.sin(solar_pt.zenith) * \
@@ -250,8 +239,9 @@ def downscale_point(row, plev_pt, surf_pt, solar_pt, horizon_values, meta):
     down_pt['SW_direct'] = down_pt.t * 0
     down_pt['SW_direct'][~sunset] = down_pt.SW_direct_tmp[~sunset] * (down_pt.cos_illumination[~sunset] / mu0[~sunset]) * (1 - shade)
     down_pt['SW'] = down_pt.SW_diffuse + down_pt.SW_direct
-    down_pt = down_pt.drop_vars(['level', 'SW_direct_tmp']).round(5)
+    down_pt = down_pt.drop_vars(['level', 'SW_direct_tmp'], errors='ignore').round(5)
     down_pt.attrs['vertical_fallback'] = int(vertical_fallback)   # 1: point below z(lowest level) at some hour
+    down_pt.attrs['vertical_fallback_steps'] = n_below             # how many steps took the lowest-level values
 
     down_pt.t.attrs = {'units': 'K', 'long_name': 'Temperature', 'standard_name': 'air_temperature'}
     down_pt.q.attrs = {'units': 'kg kg**-1', 'long_name': 'Specific humidity', 'standard_name': 'specific_humidity'}
@@ -518,8 +508,8 @@ class ClimateDownscaler:
         print(f'---> Downscaling: {len(secs)} points done this run ({n_done_before} earlier), {len(failed)} failed, '
               f'{el:.0f}s wall, {np.mean(secs) if secs else float("nan"):.1f}s per point per worker')
         if fallback:
-            print(f'---> {len(fallback)} point(s) lie below the lowest pressure level at some hour and use the '
-                  f'no-vertical-interpolation fallback: {fallback}')
+            print(f'---> {len(fallback)} point(s) lie below the lowest pressure level at some hours and take the '
+                  f'lowest-level values at those hours only (interpolated at all other hours): {fallback}')
         self.vertical_fallback_points = fallback
         if failed:
             i, err = failed[0]
